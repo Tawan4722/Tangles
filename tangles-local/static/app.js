@@ -1,8 +1,13 @@
 let sessionToken = "";
 let cache = [];
 let editingId = "";
-const revealed = new Set();
+const revealed = new Map();
 const STORAGE_KEY = "tangles_last_vault_path";
+const CLIPBOARD_CLEAR_MS = 45 * 1000;
+const REVEAL_CLEAR_MS = 30 * 1000;
+const CLIENT_IDLE_LOCK_MS = 10 * 60 * 1000;
+let clipboardClearTimer = null;
+let idleTimer = null;
 
 const $ = (id) => document.getElementById(id);
 const statusEl = $("status");
@@ -30,13 +35,26 @@ function pinError(pin) {
 
 async function api(path, opts = {}) {
   const res = await fetch(path, {
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...(sessionToken ? { "X-Session-Token": sessionToken } : {})
+    },
     ...opts
   });
   if (res.status === 204) return null;
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || "request failed");
   return data;
+}
+
+function scheduleIdleLock() {
+  clearTimeout(idleTimer);
+  if (!sessionToken) return;
+  idleTimer = setTimeout(() => $("lockBtn").click(), CLIENT_IDLE_LOCK_MS);
+}
+
+function noteActivity() {
+  scheduleIdleLock();
 }
 
 function showAuthMode(mode) {
@@ -51,6 +69,7 @@ function setUnlocked(unlocked) {
   if (!unlocked) {
     cache = [];
     revealed.clear();
+    clearTimeout(idleTimer);
     renderEntries([]);
   }
 }
@@ -88,13 +107,23 @@ function filteredEntries() {
   return cache.filter((e) => (e.name || "").toLowerCase().includes(q));
 }
 
-function maskedPassword(value) {
-  return "*".repeat(Math.max(8, Math.min((value || "").length, 22)));
+async function getPassword(entryId) {
+  const data = await api(`/api/entries/${encodeURIComponent(entryId)}/password`);
+  return data.password || "";
 }
 
 async function copyPassword(text) {
   await navigator.clipboard.writeText(text);
   setStatus("Password copied");
+  clearTimeout(clipboardClearTimer);
+  clipboardClearTimer = setTimeout(async () => {
+    try {
+      await navigator.clipboard.writeText("");
+      setStatus("Clipboard cleared");
+    } catch {
+      setStatus("Clipboard auto-clear was blocked by the browser");
+    }
+  }, CLIPBOARD_CLEAR_MS);
 }
 
 function renderEntries(items) {
@@ -116,11 +145,18 @@ function renderEntries(items) {
     name.className = "entry-name";
     name.textContent = entry.name;
     name.title = entry.name;
-    name.onclick = () => openEditDialog(entry);
+    name.onclick = async () => {
+      try {
+        const password = await getPassword(entry.id);
+        openEditDialog({ ...entry, password });
+      } catch (e) {
+        setStatus(e.message);
+      }
+    };
 
     const pw = document.createElement("div");
     pw.className = "entry-password";
-    pw.textContent = revealed.has(entry.id) ? entry.password : maskedPassword(entry.password);
+    pw.textContent = revealed.has(entry.id) ? revealed.get(entry.id) : "********";
 
     left.appendChild(name);
     left.appendChild(pw);
@@ -134,7 +170,7 @@ function renderEntries(items) {
     copyBtn.textContent = "Copy";
     copyBtn.onclick = async () => {
       try {
-        await copyPassword(entry.password);
+        await copyPassword(await getPassword(entry.id));
       } catch (e) {
         setStatus(e.message);
       }
@@ -144,10 +180,21 @@ function renderEntries(items) {
     revealBtn.className = "blur-btn";
     revealBtn.type = "button";
     revealBtn.textContent = revealed.has(entry.id) ? "Hide" : "Reveal";
-    revealBtn.onclick = () => {
-      if (revealed.has(entry.id)) revealed.delete(entry.id);
-      else revealed.add(entry.id);
-      renderEntries(filteredEntries());
+    revealBtn.onclick = async () => {
+      try {
+        if (revealed.has(entry.id)) {
+          revealed.delete(entry.id);
+        } else {
+          revealed.set(entry.id, await getPassword(entry.id));
+          setTimeout(() => {
+            revealed.delete(entry.id);
+            renderEntries(filteredEntries());
+          }, REVEAL_CLEAR_MS);
+        }
+        renderEntries(filteredEntries());
+      } catch (e) {
+        setStatus(e.message);
+      }
     };
 
     actions.appendChild(copyBtn);
@@ -160,9 +207,10 @@ function renderEntries(items) {
 }
 
 async function refresh() {
-  const items = await api(`/api/entries?session_token=${encodeURIComponent(sessionToken)}`);
+  const items = await api("/api/entries");
   cache = items;
   renderEntries(filteredEntries());
+  noteActivity();
 }
 
 async function refreshAuthMode() {
@@ -212,6 +260,7 @@ $("unlockBtn").onclick = async () => {
     sessionToken = data.session_token;
     await refresh();
     setUnlocked(true);
+    noteActivity();
   } catch (e) {
     setStatus(e.message);
   }
@@ -235,6 +284,7 @@ $("recoverBtn").onclick = async () => {
     sessionToken = data.session_token;
     await refresh();
     setUnlocked(true);
+    noteActivity();
   } catch (e) {
     setStatus(e.message);
   }
@@ -270,7 +320,6 @@ entryFormEl.onsubmit = async (event) => {
       await api("/api/entries", {
         method: "POST",
         body: JSON.stringify({
-          session_token: sessionToken,
           name,
           password
         })
@@ -279,7 +328,6 @@ entryFormEl.onsubmit = async (event) => {
       await api("/api/entries", {
         method: "PUT",
         body: JSON.stringify({
-          session_token: sessionToken,
           id: editingId,
           name,
           password
@@ -297,7 +345,7 @@ entryFormEl.onsubmit = async (event) => {
 $("deleteEntryBtn").onclick = async () => {
   try {
     if (!editingId) return;
-    await api(`/api/entries/${encodeURIComponent(editingId)}?session_token=${encodeURIComponent(sessionToken)}`, {
+    await api(`/api/entries/${encodeURIComponent(editingId)}`, {
       method: "DELETE"
     });
     closeDialog();
@@ -315,6 +363,10 @@ $("vaultPath").onchange = async () => {
     setStatus(e.message);
   }
 };
+
+["click", "keydown", "pointermove"].forEach((eventName) => {
+  window.addEventListener(eventName, noteActivity, { passive: true });
+});
 
 (async () => {
   try {

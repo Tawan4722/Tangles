@@ -6,9 +6,27 @@ const express = require("express");
 const { v4: uuidv4 } = require("uuid");
 
 const DEFAULT_PORT = 8787;
+const IDLE_SESSION_MS = 10 * 60 * 1000;
+const ABSOLUTE_SESSION_MS = 8 * 60 * 60 * 1000;
+const MAX_FAILED_UNLOCKS = 5;
+const LOCKOUT_MS = 30 * 1000;
 const app = express();
 const sessions = new Map();
+const unlockFailures = new Map();
 
+app.disable("x-powered-by");
+app.set("etag", false);
+
+app.use((req, res, next) => {
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Content-Security-Policy", "default-src 'self'; connect-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
+  next();
+});
 app.use(express.json({ limit: "1mb" }));
 app.use(express.static(path.join(__dirname, "static")));
 
@@ -172,7 +190,51 @@ function saveSessionVault(session) {
 function getSession(token) {
   const s = sessions.get(token);
   if (!s) throw new Error("invalid session");
+  const now = Date.now();
+  if (now - s.lastSeenAt > IDLE_SESSION_MS || now - s.createdAt > ABSOLUTE_SESSION_MS) {
+    sessions.delete(token);
+    throw new Error("session expired");
+  }
+  s.lastSeenAt = now;
   return s;
+}
+
+function getSessionToken(req) {
+  return req.get("X-Session-Token") || req.query.session_token || req.body.session_token;
+}
+
+function createSession(session) {
+  const sessionToken = uuidv4();
+  sessions.set(sessionToken, {
+    ...session,
+    createdAt: Date.now(),
+    lastSeenAt: Date.now()
+  });
+  return sessionToken;
+}
+
+function lockoutKey(rawVaultPath) {
+  return resolveVaultPath(rawVaultPath).toLowerCase();
+}
+
+function checkUnlockAllowed(rawVaultPath) {
+  const state = unlockFailures.get(lockoutKey(rawVaultPath));
+  if (state?.lockUntil && state.lockUntil > Date.now()) {
+    const seconds = Math.ceil((state.lockUntil - Date.now()) / 1000);
+    throw new Error(`too many failed attempts; wait ${seconds}s`);
+  }
+}
+
+function recordUnlockSuccess(rawVaultPath) {
+  unlockFailures.delete(lockoutKey(rawVaultPath));
+}
+
+function recordUnlockFailure(rawVaultPath) {
+  const key = lockoutKey(rawVaultPath);
+  const state = unlockFailures.get(key) || { count: 0, lockUntil: 0 };
+  state.count += 1;
+  state.lockUntil = state.count >= MAX_FAILED_UNLOCKS ? Date.now() + LOCKOUT_MS : 0;
+  unlockFailures.set(key, state);
 }
 
 app.get("/api/state", (req, res) => {
@@ -198,22 +260,30 @@ app.post("/api/create", (req, res) => {
 
 app.post("/api/unlock", (req, res) => {
   try {
+    checkUnlockAllowed(req.body.vault_path);
     const session = unlockByPin(req.body.vault_path, req.body.pin);
-    const sessionToken = uuidv4();
-    sessions.set(sessionToken, session);
+    recordUnlockSuccess(req.body.vault_path);
+    const sessionToken = createSession(session);
     res.json({ session_token: sessionToken });
   } catch (e) {
+    if (!e.message.startsWith("too many failed attempts")) {
+      recordUnlockFailure(req.body.vault_path);
+    }
     res.status(401).json({ error: e.message });
   }
 });
 
 app.post("/api/recover-reset-pin", (req, res) => {
   try {
+    checkUnlockAllowed(req.body.vault_path);
     const session = resetPinWithRecovery(req.body.vault_path, req.body.recovery_key, req.body.new_pin);
-    const sessionToken = uuidv4();
-    sessions.set(sessionToken, session);
+    recordUnlockSuccess(req.body.vault_path);
+    const sessionToken = createSession(session);
     res.json({ session_token: sessionToken });
   } catch (e) {
+    if (!e.message.startsWith("too many failed attempts")) {
+      recordUnlockFailure(req.body.vault_path);
+    }
     res.status(401).json({ error: e.message });
   }
 });
@@ -225,12 +295,11 @@ app.post("/api/lock", (req, res) => {
 
 app.get("/api/entries", (req, res) => {
   try {
-    const s = getSession(req.query.session_token);
+    const s = getSession(getSessionToken(req));
     const entries = s.data.entries
       .map((e) => ({
         id: e.id,
         name: e.name || e.title || "",
-        password: e.password || "",
         updated_at: e.updated_at || e.created_at || ""
       }))
       .sort((a, b) => a.name.localeCompare(b.name));
@@ -240,9 +309,20 @@ app.get("/api/entries", (req, res) => {
   }
 });
 
+app.get("/api/entries/:id/password", (req, res) => {
+  try {
+    const s = getSession(getSessionToken(req));
+    const item = s.data.entries.find((x) => x.id === req.params.id);
+    if (!item) throw new Error("entry not found");
+    res.json({ password: item.password || "" });
+  } catch (e) {
+    res.status(401).json({ error: e.message });
+  }
+});
+
 app.post("/api/entries", (req, res) => {
   try {
-    const s = getSession(req.body.session_token);
+    const s = getSession(getSessionToken(req));
     const name = (req.body.name || "").trim();
     const password = req.body.password || "";
     if (!name) throw new Error("name is required");
@@ -266,7 +346,7 @@ app.post("/api/entries", (req, res) => {
 
 app.put("/api/entries", (req, res) => {
   try {
-    const s = getSession(req.body.session_token);
+    const s = getSession(getSessionToken(req));
     const item = s.data.entries.find((x) => x.id === req.body.id);
     if (!item) throw new Error("entry not found");
 
@@ -287,7 +367,7 @@ app.put("/api/entries", (req, res) => {
 
 app.delete("/api/entries/:id", (req, res) => {
   try {
-    const s = getSession(req.query.session_token);
+    const s = getSession(getSessionToken(req));
     const before = s.data.entries.length;
     s.data.entries = s.data.entries.filter((x) => x.id !== req.params.id);
     if (s.data.entries.length === before) throw new Error("entry not found");
@@ -300,7 +380,7 @@ app.delete("/api/entries/:id", (req, res) => {
 
 app.post("/api/save", (req, res) => {
   try {
-    const s = getSession(req.body.session_token);
+    const s = getSession(getSessionToken(req));
     saveSessionVault(s);
     res.status(204).end();
   } catch (e) {
