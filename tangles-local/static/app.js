@@ -2,12 +2,14 @@ let sessionToken = "";
 let cache = [];
 let editingId = "";
 const revealed = new Set();
-
 const STORAGE_KEY = "tangles_last_vault_path";
 
 const $ = (id) => document.getElementById(id);
 const statusEl = $("status");
 const entriesEl = $("entries");
+const authPanelEl = $("authPanel");
+const setupViewEl = $("setupView");
+const loginViewEl = $("loginView");
 const vaultPanelEl = $("vaultPanel");
 const recoveryOutEl = $("recoveryOut");
 const entryDialogEl = $("entryDialog");
@@ -21,10 +23,36 @@ function vaultPath() {
   return $("vaultPath").value.trim();
 }
 
-function isPinPairValid(pin, confirmPin) {
+function pinError(pin) {
   if (!/^\d{4,12}$/.test(pin)) return "PIN must be 4-12 digits";
-  if (pin !== confirmPin) return "PIN and confirm PIN do not match";
   return "";
+}
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    headers: { "Content-Type": "application/json" },
+    ...opts
+  });
+  if (res.status === 204) return null;
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || "request failed");
+  return data;
+}
+
+function showAuthMode(mode) {
+  authPanelEl.classList.remove("hidden");
+  setupViewEl.classList.toggle("hidden", mode !== "setup");
+  loginViewEl.classList.toggle("hidden", mode !== "login");
+}
+
+function setUnlocked(unlocked) {
+  vaultPanelEl.classList.toggle("hidden", !unlocked);
+  authPanelEl.classList.toggle("hidden", unlocked);
+  if (!unlocked) {
+    cache = [];
+    revealed.clear();
+    renderEntries([]);
+  }
 }
 
 function closeDialog() {
@@ -54,17 +82,6 @@ function openEditDialog(entry) {
   entryDialogEl.showModal();
 }
 
-async function api(path, opts = {}) {
-  const res = await fetch(path, {
-    headers: { "Content-Type": "application/json" },
-    ...opts
-  });
-  if (res.status === 204) return null;
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || "request failed");
-  return data;
-}
-
 function filteredEntries() {
   const q = ($("search").value || "").trim().toLowerCase();
   if (!q) return cache;
@@ -72,17 +89,16 @@ function filteredEntries() {
 }
 
 function maskedPassword(value) {
-  return "*".repeat(Math.max(8, Math.min(value.length, 22)));
+  return "*".repeat(Math.max(8, Math.min((value || "").length, 22)));
 }
 
 async function copyPassword(text) {
   await navigator.clipboard.writeText(text);
-  setStatus("Password copied to clipboard");
+  setStatus("Password copied");
 }
 
 function renderEntries(items) {
   entriesEl.innerHTML = "";
-
   if (!items.length) {
     const li = document.createElement("li");
     li.className = "entry-item";
@@ -149,21 +165,20 @@ async function refresh() {
   renderEntries(filteredEntries());
 }
 
-function setUnlocked(unlocked) {
-  vaultPanelEl.classList.toggle("hidden", !unlocked);
-  if (!unlocked) {
-    cache = [];
-    revealed.clear();
-    renderEntries([]);
-  }
+async function refreshAuthMode() {
+  localStorage.setItem(STORAGE_KEY, vaultPath());
+  const state = await api(`/api/state?vault_path=${encodeURIComponent(vaultPath())}`);
+  showAuthMode(state.exists ? "login" : "setup");
+  setStatus(state.exists ? "Enter PIN to unlock" : "Create your PIN");
 }
 
 $("createBtn").onclick = async () => {
   try {
     const pin = $("createPin").value.trim();
     const confirm = $("createPinConfirm").value.trim();
-    const error = isPinPairValid(pin, confirm);
-    if (error) throw new Error(error);
+    const err = pinError(pin);
+    if (err) throw new Error(err);
+    if (pin !== confirm) throw new Error("PIN and confirm PIN do not match");
 
     localStorage.setItem(STORAGE_KEY, vaultPath());
     const data = await api("/api/create", {
@@ -175,8 +190,10 @@ $("createBtn").onclick = async () => {
     });
 
     recoveryOutEl.classList.remove("hidden");
-    recoveryOutEl.textContent = `Recovery code (save this now): ${data.recovery_code}`;
-    setStatus(`Vault created at ${data.vault_path}. Unlock with PIN.`);
+    recoveryOutEl.textContent = `Recovery code: ${data.recovery_code}`;
+    $("unlockPin").value = pin;
+    showAuthMode("login");
+    setStatus("Vault created. Save recovery code, then unlock with PIN.");
   } catch (e) {
     setStatus(e.message);
   }
@@ -195,7 +212,6 @@ $("unlockBtn").onclick = async () => {
     sessionToken = data.session_token;
     await refresh();
     setUnlocked(true);
-    setStatus("Unlocked");
   } catch (e) {
     setStatus(e.message);
   }
@@ -203,10 +219,11 @@ $("unlockBtn").onclick = async () => {
 
 $("recoverBtn").onclick = async () => {
   try {
-    localStorage.setItem(STORAGE_KEY, vaultPath());
     const newPin = $("newPin").value.trim();
-    if (!/^\d{4,12}$/.test(newPin)) throw new Error("New PIN must be 4-12 digits");
+    const err = pinError(newPin);
+    if (err) throw new Error(err);
 
+    localStorage.setItem(STORAGE_KEY, vaultPath());
     const data = await api("/api/recover-reset-pin", {
       method: "POST",
       body: JSON.stringify({
@@ -218,7 +235,6 @@ $("recoverBtn").onclick = async () => {
     sessionToken = data.session_token;
     await refresh();
     setUnlocked(true);
-    setStatus("PIN reset completed and vault unlocked");
   } catch (e) {
     setStatus(e.message);
   }
@@ -231,6 +247,7 @@ $("lockBtn").onclick = async () => {
       body: JSON.stringify({ session_token: sessionToken })
     });
     sessionToken = "";
+    showAuthMode("login");
     setUnlocked(false);
     setStatus("Locked");
   } catch (e) {
@@ -258,7 +275,6 @@ entryFormEl.onsubmit = async (event) => {
           password
         })
       });
-      setStatus("Entry added");
     } else {
       await api("/api/entries", {
         method: "PUT",
@@ -269,8 +285,8 @@ entryFormEl.onsubmit = async (event) => {
           password
         })
       });
-      setStatus("Entry updated");
     }
+
     closeDialog();
     await refresh();
   } catch (e) {
@@ -286,16 +302,27 @@ $("deleteEntryBtn").onclick = async () => {
     });
     closeDialog();
     await refresh();
-    setStatus("Entry deleted");
   } catch (e) {
     setStatus(e.message);
   }
 };
 
 $("search").oninput = () => renderEntries(filteredEntries());
+$("vaultPath").onchange = async () => {
+  try {
+    await refreshAuthMode();
+  } catch (e) {
+    setStatus(e.message);
+  }
+};
 
-(() => {
-  const lastPath = localStorage.getItem(STORAGE_KEY);
-  if (lastPath) $("vaultPath").value = lastPath;
-  setUnlocked(false);
+(async () => {
+  try {
+    const lastPath = localStorage.getItem(STORAGE_KEY);
+    if (lastPath) $("vaultPath").value = lastPath;
+    setUnlocked(false);
+    await refreshAuthMode();
+  } catch (e) {
+    setStatus(e.message);
+  }
 })();

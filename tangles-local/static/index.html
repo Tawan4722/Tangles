@@ -8,26 +8,21 @@
 </head>
 <body>
   <main class="app-shell">
-    <section class="glass-card auth-card">
+    <section id="authPanel" class="glass-card auth-card hidden">
       <h1>Tangles</h1>
-      <p class="sub">Local password manager with PIN lock and recovery code.</p>
+      <p class="sub">Local vault. First time gives recovery code, next time only asks PIN.</p>
 
-      <label for="vaultPath">Vault file path</label>
-      <input id="vaultPath" placeholder="Example: E:\vault\vault.tangles or .\vault.tangles" />
+      <div id="setupView" class="stack hidden">
+        <h2>First Time Setup</h2>
+        <input id="createPin" type="password" inputmode="numeric" placeholder="Create PIN (4-12 digits)" />
+        <input id="createPinConfirm" type="password" inputmode="numeric" placeholder="Confirm PIN" />
+        <button id="createBtn" class="blur-btn">Create Vault</button>
+      </div>
 
-      <div class="auth-grid">
-        <div class="block">
-          <h2>Unlock</h2>
-          <input id="unlockPin" type="password" inputmode="numeric" placeholder="PIN (4-12 digits)" />
-          <button id="unlockBtn" class="blur-btn">Unlock</button>
-        </div>
-
-        <div class="block">
-          <h2>First Time Setup</h2>
-          <input id="createPin" type="password" inputmode="numeric" placeholder="Create PIN (4-12 digits)" />
-          <input id="createPinConfirm" type="password" inputmode="numeric" placeholder="Confirm PIN" />
-          <button id="createBtn" class="blur-btn">Create Vault</button>
-        </div>
+      <div id="loginView" class="stack hidden">
+        <h2>Unlock</h2>
+        <input id="unlockPin" type="password" inputmode="numeric" placeholder="PIN" />
+        <button id="unlockBtn" class="blur-btn">Unlock</button>
       </div>
 
       <details class="recovery-box">
@@ -37,16 +32,18 @@
         <button id="recoverBtn" class="blur-btn">Recover and Reset PIN</button>
       </details>
 
+      <details class="recovery-box">
+        <summary>Vault Location</summary>
+        <input id="vaultPath" placeholder="Leave blank for default vault next to app" />
+      </details>
+
       <div id="recoveryOut" class="recovery-out hidden"></div>
-      <div id="status" class="status">Enter vault path and unlock or create.</div>
+      <div id="status" class="status"></div>
     </section>
 
     <section id="vaultPanel" class="glass-card vault-panel hidden">
       <header class="vault-head">
-        <div class="title-wrap">
-          <h2>Stored Passwords</h2>
-          <span id="sessionBadge" class="badge">Unlocked</span>
-        </div>
+        <h2>Passwords</h2>
         <div class="head-actions">
           <button id="addBtn" class="blur-btn">Add</button>
           <button id="lockBtn" class="blur-btn danger">Lock</button>

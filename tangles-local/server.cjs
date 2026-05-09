@@ -175,6 +175,18 @@ function getSession(token) {
   return s;
 }
 
+app.get("/api/state", (req, res) => {
+  try {
+    const vaultPath = resolveVaultPath(req.query.vault_path);
+    res.json({
+      vault_path: vaultPath,
+      exists: fs.existsSync(vaultPath)
+    });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
 app.post("/api/create", (req, res) => {
   try {
     const { recoveryCode, vaultPath } = createVault(req.body.vault_path, req.body.pin);
