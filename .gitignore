@@ -1,4 +1,6 @@
-release/
+release/*
+!release/Open-Tangles.cmd
+!release/tangles-local-win.exe
 tangles-local/node_modules/
 *.tangles
 *.tmp
