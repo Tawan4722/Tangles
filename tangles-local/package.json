@@ -1,0 +1,25 @@
+{
+  "name": "tangles-local",
+  "version": "0.1.0",
+  "private": true,
+  "main": "server.cjs",
+  "bin": "server.cjs",
+  "scripts": {
+    "start": "node server.cjs",
+    "package:win": "pkg . --targets node18-win-x64 --output ../release/tangles-local-win.exe",
+    "package:linux": "pkg . --targets node18-linux-x64 --output ../release/tangles-local-linux",
+    "package:mac": "pkg . --targets node18-macos-x64 --output ../release/tangles-local-macos"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "uuid": "^11.1.0"
+  },
+  "devDependencies": {
+    "pkg": "^5.8.1"
+  },
+  "pkg": {
+    "assets": [
+      "static/**/*"
+    ]
+  }
+}

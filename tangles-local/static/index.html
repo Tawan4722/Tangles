@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Tangles</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <main class="app-shell">
+    <section class="glass-card auth-card">
+      <h1>Tangles</h1>
+      <p class="sub">Local password manager with PIN lock and recovery code.</p>
+
+      <label for="vaultPath">Vault file path</label>
+      <input id="vaultPath" placeholder="Example: E:\vault\vault.tangles or .\vault.tangles" />
+
+      <div class="auth-grid">
+        <div class="block">
+          <h2>Unlock</h2>
+          <input id="unlockPin" type="password" inputmode="numeric" placeholder="PIN (4-12 digits)" />
+          <button id="unlockBtn" class="blur-btn">Unlock</button>
+        </div>
+
+        <div class="block">
+          <h2>First Time Setup</h2>
+          <input id="createPin" type="password" inputmode="numeric" placeholder="Create PIN (4-12 digits)" />
+          <input id="createPinConfirm" type="password" inputmode="numeric" placeholder="Confirm PIN" />
+          <button id="createBtn" class="blur-btn">Create Vault</button>
+        </div>
+      </div>
+
+      <details class="recovery-box">
+        <summary>Forgot PIN</summary>
+        <input id="recoveryCode" placeholder="Recovery code" />
+        <input id="newPin" type="password" inputmode="numeric" placeholder="New PIN (4-12 digits)" />
+        <button id="recoverBtn" class="blur-btn">Recover and Reset PIN</button>
+      </details>
+
+      <div id="recoveryOut" class="recovery-out hidden"></div>
+      <div id="status" class="status">Enter vault path and unlock or create.</div>
+    </section>
+
+    <section id="vaultPanel" class="glass-card vault-panel hidden">
+      <header class="vault-head">
+        <div class="title-wrap">
+          <h2>Stored Passwords</h2>
+          <span id="sessionBadge" class="badge">Unlocked</span>
+        </div>
+        <div class="head-actions">
+          <button id="addBtn" class="blur-btn">Add</button>
+          <button id="lockBtn" class="blur-btn danger">Lock</button>
+        </div>
+      </header>
+
+      <div class="search-wrap">
+        <input id="search" placeholder="Search by name" />
+      </div>
+
+      <ul id="entries" class="entries"></ul>
+    </section>
+  </main>
+
+  <dialog id="entryDialog" class="entry-dialog">
+    <form method="dialog" id="entryForm">
+      <h3 id="dialogTitle">Add Entry</h3>
+      <input id="entryName" placeholder="Name" />
+      <input id="entryPassword" type="password" placeholder="Password" />
+      <div class="dialog-actions">
+        <button id="saveEntryBtn" value="default" class="blur-btn" type="submit">Save</button>
+        <button id="deleteEntryBtn" class="blur-btn danger hidden" type="button">Delete</button>
+        <button class="blur-btn plain" type="button" id="cancelEntryBtn">Cancel</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="/app.js"></script>
+</body>
+</html>
